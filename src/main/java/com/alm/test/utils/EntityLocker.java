@@ -1,9 +1,6 @@
 package com.alm.test.utils;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * The utility class that provides synchronization mechanism similar to row-level DB locking.
@@ -23,11 +20,14 @@ import java.util.Set;
  */
 public class EntityLocker<T> {
     private final Map<T, Lock> keyLocks = new HashMap<>();
+    private final Map<Long, T> threadWaitingForLocks = new HashMap<>();
     private final Set<Long> threadsWithLocks = new HashSet<>();
     private final ThreadLocal<Set<T>> lockedKeys = ThreadLocal.withInitial(HashSet::new);
 
     private final ThreadLocal<Boolean> isLockEscalated = ThreadLocal.withInitial(() -> false);
     private final int escalationThreshold;
+
+    private final long waitingTimeout = 100;
 
     private boolean isWaitingForGlobalLock = false;
     private Lock globalLock;
@@ -48,6 +48,8 @@ public class EntityLocker<T> {
      *
      * @param key
      * @throws InterruptedException
+     * @throws DeadLockException throws in case of deadlock is detected. No one already acquired locked is released,
+     * they should be released manually.
      */
     public synchronized void lock(T key) throws InterruptedException {
         if (key == null) {
@@ -59,17 +61,52 @@ public class EntityLocker<T> {
             wait();
         }
 
-        Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
-        while (!lock.tryAcquire()) {
-            wait();
-            lock = keyLocks.computeIfAbsent(key, k -> createLock());
+        threadWaitingForLocks.put(threadId(), key);
+        try {
+            Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
+            boolean isFirstIteration = true;
+            while (!lock.tryAcquire()) {
+                if (!isFirstIteration) {
+                    checkForDeadlock(key);
+                }
+                wait(waitingTimeout);
+                isFirstIteration = false;
+                lock = keyLocks.computeIfAbsent(key, k -> createLock());
+            }
+            lockedKeys.get().add(key);
+            threadsWithLocks.add(threadId());
         }
-        lockedKeys.get().add(key);
-        threadsWithLocks.add(threadId());
+        finally {
+            threadWaitingForLocks.remove(threadId());
+        }
 
         escalateLockIfRequired();
 
         notifyAll();
+    }
+
+    private void checkForDeadlock(T key) {
+        long currentThreadId = threadId();
+        List<Long> visitedThreads = new ArrayList<>(threadsWithLocks.size());
+
+        T waitedKey = key;
+        while (true) {
+            Lock keyLock = keyLocks.get(waitedKey);
+            if (keyLock == null || visitedThreads.contains(keyLock.getThreadId())) {
+                return;
+            }
+
+            visitedThreads.add(keyLock.getThreadId());
+
+            if (keyLock.getThreadId() == currentThreadId) {
+                throw new DeadLockException();
+            }
+
+            waitedKey = threadWaitingForLocks.get(keyLock.getThreadId());
+            if (waitedKey == null) {
+                return;
+            }
+        }
     }
 
     /**
