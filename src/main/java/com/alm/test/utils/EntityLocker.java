@@ -1,9 +1,6 @@
 package com.alm.test.utils;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * The utility class that provides synchronization mechanism similar to row-level DB locking.
@@ -23,11 +20,14 @@ import java.util.Set;
  */
 public class EntityLocker<T> {
     private final Map<T, Lock> keyLocks = new HashMap<>();
+    private final Map<Long, T> threadWaitingForLocks = new HashMap<>();
     private final Set<Long> threadsWithLocks = new HashSet<>();
     private final ThreadLocal<Set<T>> lockedKeys = ThreadLocal.withInitial(HashSet::new);
 
     private final ThreadLocal<Boolean> isLockEscalated = ThreadLocal.withInitial(() -> false);
     private final int escalationThreshold;
+
+    private final long waitingTimeout = 100;
 
     private boolean isWaitingForGlobalLock = false;
     private Lock globalLock;
@@ -41,13 +41,16 @@ public class EntityLocker<T> {
     }
 
     /**
-     * The method acquire the specified entity.
+     * The method acquire the specified entity. The method is synchronized.
      * Support reentrant lock.
      *
      * Lock can be escalated to global if locks count isn't less than escalationThreshold.
      *
      * @param key
-     * @throws InterruptedException
+     * @throws InterruptedException throws in case of the thread is interrupted. No one already acquired locked is released,
+     * they should be released manually.
+     * @throws DeadLockException throws in case of deadlock is detected. No one already acquired locked is released,
+     * they should be released manually.
      */
     public synchronized void lock(T key) throws InterruptedException {
         if (key == null) {
@@ -59,17 +62,57 @@ public class EntityLocker<T> {
             wait();
         }
 
-        Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
-        while (!lock.tryAcquire()) {
-            wait();
-            lock = keyLocks.computeIfAbsent(key, k -> createLock());
+        threadWaitingForLocks.put(threadId(), key);
+        try {
+            Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
+            boolean isFirstIteration = true;
+            while (!lock.tryAcquire()) {
+                if (!isFirstIteration) {
+                    checkForDeadlock(key);
+                }
+                wait(waitingTimeout);
+                isFirstIteration = false;
+                lock = keyLocks.computeIfAbsent(key, k -> createLock());
+            }
+            lockedKeys.get().add(key);
+            threadsWithLocks.add(threadId());
         }
-        lockedKeys.get().add(key);
-        threadsWithLocks.add(threadId());
+        finally {
+            threadWaitingForLocks.remove(threadId());
+        }
 
         escalateLockIfRequired();
 
         notifyAll();
+    }
+
+    private void checkForDeadlock(T key) {
+        long currentThreadId = threadId();
+        List<Long> checkedThreads = new ArrayList<>(threadsWithLocks.size());
+
+        while (true) {
+            Lock lock = keyLocks.get(key);
+            if (lock == null || checkedThreads.contains(lock.getThreadId())) {
+                //the key, wanted to hold by some thread, is not hold by any thread, there is no deadlock
+                //OR
+                //the key is hold by already checked thread (not the current thread), it means that the cycle is found,
+                // but current thread is not the cycle. The deadlock exception will be thrown in another thread.
+                return;
+            }
+
+            checkedThreads.add(lock.getThreadId());
+
+            if (lock.getThreadId() == currentThreadId) {
+                // cycle is found. It's a deadlock
+                throw new DeadLockException();
+            }
+
+            key = threadWaitingForLocks.get(lock.getThreadId());
+            if (key == null) {
+                //the thread don't wait for some key. no cycle.
+                return;
+            }
+        }
     }
 
     /**
@@ -78,7 +121,8 @@ public class EntityLocker<T> {
      * Global lock can be deescalated to locks if locks count is less than escalationThreshold.
      *
      * @param key
-     * @throws IllegalMonitorStateException if key not locked or locked by another thread.
+     * @throws IllegalMonitorStateException if key not locked or locked by another thread. No one already acquired
+     * locked is released, they should be released manually.
      */
     public synchronized void unlock(T key) {
         if (key == null) {
