@@ -20,7 +20,7 @@ I. (done) Allow reentrant locking.
 
 II. Allow the caller to specify timeout for locking an entity.
 
-III. (In progress) Implement protection from deadlocks (but not taking into account possible locks outside EntityLocker).
+III. (done) Implement protection from deadlocks (but not taking into account possible locks outside EntityLocker).
 
 IV. (done) Implement global lock. Protected code that executes under a global lock must not execute concurrently with any other protected code.
 
