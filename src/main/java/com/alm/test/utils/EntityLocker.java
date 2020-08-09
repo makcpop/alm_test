@@ -198,6 +198,19 @@ public class EntityLocker<T> {
         notifyAll();
     }
 
+    /**
+     * Queries if this lock is held by any thread. This method is
+     * designed for use in monitoring of the system state,
+     * not for synchronization control.
+     *
+     * @param key key
+     * @return {@code true} if any thread holds this lock and
+     *         {@code false} otherwise
+     */
+    public boolean isLocked(T key) {
+        return keyLocks.containsKey(key);
+    }
+
     private void escalateLockIfRequired() throws InterruptedException {
         if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
             return;
