@@ -86,6 +86,41 @@ public class EntityLocker<T> {
         notifyAll();
     }
 
+    /**
+     * The method try to acquire the specified entity. The method is synchronized.
+     * Support reentrant lock.
+     *
+     * Lock can be escalated to global if locks count isn't less than escalationThreshold and .
+     *
+     * @param key
+     * @throws InterruptedException throws in case of the thread is interrupted. No one already acquired locked is released,
+     * they should be released manually.
+     * @throws DeadLockException throws in case of deadlock is detected. No one already acquired locked is released,
+     * they should be released manually.
+     */
+    public synchronized boolean tryLock(T key) {
+        if (key == null) {
+            throw new IllegalArgumentException("Key is null");
+        }
+
+        if ((isWaitingForGlobalLock && !threadsWithLocks.contains(threadId()))
+                || (globalLock != null && !globalLock.acquiredByCurrentThread())) {
+            return false;
+        }
+
+        Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
+        if (lock.tryAcquire()) {
+            return false;
+        }
+        lockedKeys.get().add(key);
+        threadsWithLocks.add(threadId());
+
+        tryEscalateLockIfRequired();
+
+        notifyAll();
+        return true;
+    }
+
     private void checkForDeadlock(T key) {
         long currentThreadId = threadId();
         List<Long> checkedThreads = new ArrayList<>(threadsWithLocks.size());
@@ -221,6 +256,24 @@ public class EntityLocker<T> {
         globalLock.tryAcquire();
 
         isLockEscalated.set(true);
+    }
+
+    private boolean tryEscalateLockIfRequired() {
+        if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
+            return false;
+        }
+        if (isWaitingForGlobalLock || globalLock != null) {
+            return false;
+        }
+        if (isOtherThreadsHaveLocks()) {
+            return false;
+        }
+
+        globalLock = createLock();
+        globalLock.tryAcquire();
+        isLockEscalated.set(true);
+
+        return true;
     }
 
     private void deescalateLockIfRequired() {
