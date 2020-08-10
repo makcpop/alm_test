@@ -1,5 +1,6 @@
 package com.alm.test.utils;
 
+import java.time.Instant;
 import java.util.*;
 
 /**
@@ -62,8 +63,8 @@ public class EntityLocker<T> {
             wait();
         }
 
-        threadWaitingForLocks.put(threadId(), key);
         try {
+            threadWaitingForLocks.put(threadId(), key);
             Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
             boolean isFirstIteration = true;
             while (!lock.tryAcquire()) {
@@ -87,14 +88,12 @@ public class EntityLocker<T> {
     }
 
     /**
-     * The method try to acquire the specified entity. The method is synchronized.
+     * The method try to acquire the specified entity. The method doesn't have any waiting. The method is synchronized.
      * Support reentrant lock.
      *
-     * Lock can be escalated to global if locks count isn't less than escalationThreshold and .
+     * Lock can be escalated to global if locks count isn't less than escalationThreshold and no any waiting is required.
      *
      * @param key
-     * @throws InterruptedException throws in case of the thread is interrupted. No one already acquired locked is released,
-     * they should be released manually.
      * @throws DeadLockException throws in case of deadlock is detected. No one already acquired locked is released,
      * they should be released manually.
      */
@@ -109,7 +108,8 @@ public class EntityLocker<T> {
         }
 
         Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
-        if (lock.tryAcquire()) {
+        if (!lock.tryAcquire()) {
+            checkForDeadlock(key);
             return false;
         }
         lockedKeys.get().add(key);
@@ -121,33 +121,64 @@ public class EntityLocker<T> {
         return true;
     }
 
-    private void checkForDeadlock(T key) {
-        long currentThreadId = threadId();
-        List<Long> checkedThreads = new ArrayList<>(threadsWithLocks.size());
-
-        while (true) {
-            Lock lock = keyLocks.get(key);
-            if (lock == null || checkedThreads.contains(lock.getThreadId())) {
-                //the key, wanted to hold by some thread, is not hold by any thread, there is no deadlock
-                //OR
-                //the key is hold by already checked thread (not the current thread), it means that the cycle is found,
-                // but current thread is not the cycle. The deadlock exception will be thrown in another thread.
-                return;
-            }
-
-            checkedThreads.add(lock.getThreadId());
-
-            if (lock.getThreadId() == currentThreadId) {
-                // cycle is found. It's a deadlock
-                throw new DeadLockException();
-            }
-
-            key = threadWaitingForLocks.get(lock.getThreadId());
-            if (key == null) {
-                //the thread don't wait for some key. no cycle.
-                return;
-            }
+    /**
+     * The method try to acquire the specified entity. If any thread hold global or the key lock, method will wait for
+     * specified timeout. The method is synchronized. Support reentrant lock.
+     *
+     * Lock can be escalated to global if locks count isn't less than escalationThreshold and lock can be hold in
+     * specified timeout.
+     *
+     * @param key
+     * @throws InterruptedException throws in case of the thread is interrupted. No one already acquired locked is released,
+     * they should be released manually.
+     * @throws DeadLockException throws in case of deadlock is detected. No one already acquired locked is released,
+     * they should be released manually.
+     */
+    public synchronized boolean tryLock(T key, long timeout) throws InterruptedException {
+        if (key == null) {
+            throw new IllegalArgumentException("Key is null");
         }
+
+        long tryUntil = Instant.now().toEpochMilli() + timeout;
+
+        while ((isWaitingForGlobalLock && !threadsWithLocks.contains(threadId()))
+                || (globalLock != null && !globalLock.acquiredByCurrentThread())) {
+            long currentTimeout = getTimeout(tryUntil);
+            if (currentTimeout <= 0) {
+                return false;
+            }
+            wait(currentTimeout);
+        }
+
+        threadWaitingForLocks.put(threadId(), key);
+        try {
+            Lock lock = keyLocks.computeIfAbsent(key, k -> createLock());
+            boolean isFirstIteration = true;
+            while (!lock.tryAcquire()) {
+                if (!isFirstIteration) {
+                    checkForDeadlock(key);
+                }
+
+                long currentTimeout = getTimeout(tryUntil);
+                if (currentTimeout <= 0) {
+                    return false;
+                }
+
+                wait(currentTimeout);
+                isFirstIteration = false;
+                lock = keyLocks.computeIfAbsent(key, k -> createLock());
+            }
+            lockedKeys.get().add(key);
+            threadsWithLocks.add(threadId());
+        }
+        finally {
+            threadWaitingForLocks.remove(threadId());
+        }
+
+        tryEscalateLockIfRequired();
+
+        notifyAll();
+        return true;
     }
 
     /**
@@ -233,6 +264,39 @@ public class EntityLocker<T> {
         notifyAll();
     }
 
+    private long getTimeout(long tryUntil) {
+        return Long.min(waitingTimeout, tryUntil - Instant.now().toEpochMilli());
+    }
+
+    private void checkForDeadlock(T key) {
+        long currentThreadId = threadId();
+        List<Long> checkedThreads = new ArrayList<>(threadsWithLocks.size());
+
+        while (true) {
+            Lock lock = keyLocks.get(key);
+            if (lock == null || checkedThreads.contains(lock.getThreadId())) {
+                //the key, wanted to hold by some thread, is not hold by any thread, there is no deadlock
+                //OR
+                //the key is hold by already checked thread (not the current thread), it means that the cycle is found,
+                // but current thread is not the cycle. The deadlock exception will be thrown in another thread.
+                return;
+            }
+
+            checkedThreads.add(lock.getThreadId());
+
+            if (lock.getThreadId() == currentThreadId) {
+                // cycle is found. It's a deadlock
+                throw new DeadLockException();
+            }
+
+            key = threadWaitingForLocks.get(lock.getThreadId());
+            if (key == null) {
+                //the thread don't wait for some key. no cycle.
+                return;
+            }
+        }
+    }
+
     private void escalateLockIfRequired() throws InterruptedException {
         if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
             return;
@@ -246,9 +310,38 @@ public class EntityLocker<T> {
             while (isOtherThreadsHaveLocks()) {
                 wait();
             }
-        } catch (InterruptedException e) {
+        }
+        finally {
             isWaitingForGlobalLock = false;
-            throw e;
+        }
+        globalLock = createLock();
+        isWaitingForGlobalLock = false;
+
+        globalLock.tryAcquire();
+
+        isLockEscalated.set(true);
+    }
+
+    private void tryEscalateLockIfRequired(long tryUntil) throws InterruptedException {
+        if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
+            return;
+        }
+        if (isWaitingForGlobalLock || globalLock != null) {
+            return;
+        }
+
+        try {
+            isWaitingForGlobalLock = true;
+            while (isOtherThreadsHaveLocks()) {
+                long currentTimeout = getTimeout(tryUntil);
+                if (currentTimeout <= 0) {
+                    return;
+                }
+                wait(currentTimeout);;
+            }
+        }
+        finally {
+            isWaitingForGlobalLock = false;
         }
         globalLock = createLock();
         isWaitingForGlobalLock = false;

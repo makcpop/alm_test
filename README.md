@@ -18,7 +18,7 @@ Bonus requirements (optional):
 
 I. (done) Allow reentrant locking.
 
-II. Allow the caller to specify timeout for locking an entity.
+II. (done) Allow the caller to specify timeout for locking an entity.
 
 III. (done) Implement protection from deadlocks (but not taking into account possible locks outside EntityLocker).
 
