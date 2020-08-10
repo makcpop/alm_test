@@ -455,6 +455,16 @@ class EntityLockerTest {
         assertThat(getReentrantLockCount(lock), is(reentrantCount));
     }
 
+    @Test
+    public void testIsLocked() throws Exception {
+        long key = 1L;
+        EntityLocker<Long> locker = new EntityLocker<>();
+        assertFalse(locker.isLocked(key));
+        locker.lock(key);
+        assertTrue(locker.isLocked(key));
+
+    }
+
     private Lock getGlobalLock(EntityLocker<Long> entityLocker) throws Exception{
         Field keyLocks = EntityLocker.class.getDeclaredField("globalLock");
         keyLocks.setAccessible(true);
