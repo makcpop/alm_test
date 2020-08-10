@@ -235,7 +235,6 @@ class EntityLockerTest {
         assertThat(getLockedKeys(locker).get(), contains(key));
 
         checkLock(getKeyLocks(locker).get(key), 1);
-        Lock lock;
 
         assertFalse(getIsLockEscalated(locker).get());
         assertFalse(getIsWaitingForGlobalLock(locker));
@@ -449,8 +448,7 @@ class EntityLockerTest {
         assertFalse(locker.tryLock(key, 1000L));
     }
 
-    private void checkLock(Lock globalLock, int reentrantCount) throws Exception {
-        Lock lock = globalLock;
+    private void checkLock(Lock lock, int reentrantCount) throws Exception {
         assertThat(getThreadId(lock), is(Thread.currentThread().getId()));
         assertThat(getReentrantLockCount(lock), is(reentrantCount));
     }
@@ -462,7 +460,43 @@ class EntityLockerTest {
         assertFalse(locker.isLocked(key));
         locker.lock(key);
         assertTrue(locker.isLocked(key));
+    }
 
+    @Test
+    public void testUnlockAll() throws Exception {
+        EntityLocker<Long> locker = new EntityLocker<>();
+
+        locker.lock(1L);
+        locker.lock(2L);
+
+        locker.unlockAll();
+
+        assertThat(getKeyLocks(locker).size(), is(0));
+    }
+
+    @Test
+    public void testUnlockAll_lockedByAnotherThread() throws Exception {
+        EntityLocker<Long> locker = new EntityLocker<>();
+
+        locker.lock(1L);
+        locker.lock(2L);
+
+        CountDownLatch latch = new CountDownLatch(1);
+
+        new Thread(() -> {
+            try {
+                locker.lock(3L);
+                latch.countDown();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        latch.await();
+
+        locker.unlockAll();
+
+        assertThat(getKeyLocks(locker).size(), is(1));
     }
 
     private Lock getGlobalLock(EntityLocker<Long> entityLocker) throws Exception{

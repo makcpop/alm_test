@@ -175,14 +175,14 @@ public class EntityLocker<T> {
             threadWaitingForLocks.remove(threadId());
         }
 
-        tryEscalateLockIfRequired();
+        tryEscalateLockIfRequired(tryUntil);
 
         notifyAll();
         return true;
     }
 
     /**
-     * The method release the specified entity.
+     * The method release the specified key.
      *
      * Global lock can be deescalated to locks if locks count is less than escalationThreshold.
      *
@@ -261,6 +261,31 @@ public class EntityLocker<T> {
         if (globalLock.isReleased()) {
             globalLock = null;
         }
+        notifyAll();
+    }
+
+    /**
+     * The method release all key locked by current thread.
+     *
+     * Global lock will be deescalated if acquired.
+     *
+     * @throws IllegalMonitorStateException if key not locked or locked by another thread. No one already acquired
+     * locked is released, they should be released manually.
+     */
+    public synchronized void unlockAll() {
+        for (T key : lockedKeys.get()) {
+            Lock lock = keyLocks.get(key);
+            if (lock == null) {
+                continue;
+            }
+
+            keyLocks.remove(key);
+        }
+        lockedKeys.get().clear();
+        threadsWithLocks.remove(threadId());
+
+        deescalateLockIfRequired();
+
         notifyAll();
     }
 
@@ -350,7 +375,7 @@ public class EntityLocker<T> {
                 if (currentTimeout <= 0) {
                     return;
                 }
-                wait(currentTimeout);;
+                wait(currentTimeout);
             }
         }
         finally {
@@ -364,22 +389,20 @@ public class EntityLocker<T> {
         isLockEscalated.set(true);
     }
 
-    private boolean tryEscalateLockIfRequired() {
+    private void tryEscalateLockIfRequired() {
         if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
-            return false;
+            return;
         }
         if (isWaitingForGlobalLock || globalLock != null) {
-            return false;
+            return;
         }
         if (isOtherThreadsHaveLocks()) {
-            return false;
+            return;
         }
 
         globalLock = createLock();
         globalLock.tryAcquire();
         isLockEscalated.set(true);
-
-        return true;
     }
 
     private void deescalateLockIfRequired() {
@@ -409,7 +432,7 @@ public class EntityLocker<T> {
         return Thread.currentThread().getId();
     }
 
-    public class Lock {
+    public static class Lock {
         private final long threadId;
         private int reentrantLockCount;
 
@@ -420,10 +443,6 @@ public class EntityLocker<T> {
 
         public long getThreadId() {
             return threadId;
-        }
-
-        public int getReentrantLockCount() {
-            return reentrantLockCount;
         }
 
         public boolean tryAcquire() {
