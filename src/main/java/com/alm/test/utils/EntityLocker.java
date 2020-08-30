@@ -30,7 +30,7 @@ public class EntityLocker<T> {
 
     private final long waitingTimeout = 100;
 
-    private boolean isWaitingForGlobalLock = false;
+    private Long waitingForGlobalLock;
     private Lock globalLock;
 
     public EntityLocker(int escalationThreshold) {
@@ -58,7 +58,7 @@ public class EntityLocker<T> {
             throw new IllegalArgumentException("Key is null");
         }
 
-        while ((isWaitingForGlobalLock && !threadsWithLocks.contains(threadId()))
+        while ((waitingForGlobalLock != null && !threadsWithLocks.contains(threadId()))
                 || (globalLock != null && !globalLock.acquiredByCurrentThread())) {
             wait();
         }
@@ -102,7 +102,7 @@ public class EntityLocker<T> {
             throw new IllegalArgumentException("Key is null");
         }
 
-        if ((isWaitingForGlobalLock && !threadsWithLocks.contains(threadId()))
+        if ((waitingForGlobalLock != null && !threadsWithLocks.contains(threadId()))
                 || (globalLock != null && !globalLock.acquiredByCurrentThread())) {
             return false;
         }
@@ -141,7 +141,7 @@ public class EntityLocker<T> {
 
         long tryUntil = Instant.now().toEpochMilli() + timeout;
 
-        while ((isWaitingForGlobalLock && !threadsWithLocks.contains(threadId()))
+        while ((waitingForGlobalLock != null && !threadsWithLocks.contains(threadId()))
                 || (globalLock != null && !globalLock.acquiredByCurrentThread())) {
             long currentTimeout = getTimeout(tryUntil);
             if (currentTimeout <= 0) {
@@ -222,24 +222,24 @@ public class EntityLocker<T> {
      * @throws InterruptedException
      */
     public synchronized void lockGlobal() throws InterruptedException {
-        while (isWaitingForGlobalLock ||
+        while (waitingForGlobalLock != null ||
                 (globalLock != null && !globalLock.acquiredByCurrentThread())) {
             wait();
         }
 
         if (globalLock == null) {
             try {
-                isWaitingForGlobalLock = true;
+                waitingForGlobalLock = threadId();
                 while (isOtherThreadsHaveLocks()) {
                     wait();
                 }
             } catch (InterruptedException e) {
-                isWaitingForGlobalLock = false;
+                waitingForGlobalLock = null;
                 notifyAll();
                 throw e;
             }
             globalLock = createLock();
-            isWaitingForGlobalLock = false;
+            waitingForGlobalLock = null;
         }
 
         globalLock.tryAcquire();
@@ -322,7 +322,7 @@ public class EntityLocker<T> {
 
             checkedThreads.add(lock.getThreadId());
 
-            if (lock.getThreadId() == currentThreadId) {
+            if (lock.getThreadId() == currentThreadId || Objects.equals(waitingForGlobalLock, currentThreadId)) {
                 // cycle is found. It's a deadlock
                 throw new DeadLockException();
             }
@@ -339,21 +339,21 @@ public class EntityLocker<T> {
         if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
             return;
         }
-        if (isWaitingForGlobalLock || globalLock != null) {
+        if (waitingForGlobalLock != null || globalLock != null) {
             return;
         }
 
         try {
-            isWaitingForGlobalLock = true;
+            waitingForGlobalLock = threadId();
             while (isOtherThreadsHaveLocks()) {
                 wait();
             }
         }
         finally {
-            isWaitingForGlobalLock = false;
+            waitingForGlobalLock = null;
         }
         globalLock = createLock();
-        isWaitingForGlobalLock = false;
+        waitingForGlobalLock = null;
 
         globalLock.tryAcquire();
 
@@ -364,12 +364,12 @@ public class EntityLocker<T> {
         if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
             return;
         }
-        if (isWaitingForGlobalLock || globalLock != null) {
+        if (waitingForGlobalLock != null || globalLock != null) {
             return;
         }
 
         try {
-            isWaitingForGlobalLock = true;
+            waitingForGlobalLock = threadId();
             while (isOtherThreadsHaveLocks()) {
                 long currentTimeout = getTimeout(tryUntil);
                 if (currentTimeout <= 0) {
@@ -379,10 +379,10 @@ public class EntityLocker<T> {
             }
         }
         finally {
-            isWaitingForGlobalLock = false;
+            waitingForGlobalLock = null;
         }
         globalLock = createLock();
-        isWaitingForGlobalLock = false;
+        waitingForGlobalLock = null;
 
         globalLock.tryAcquire();
 
@@ -393,7 +393,7 @@ public class EntityLocker<T> {
         if (lockedKeys.get().size() < escalationThreshold || isLockEscalated.get()) {
             return;
         }
-        if (isWaitingForGlobalLock || globalLock != null) {
+        if (waitingForGlobalLock != null || globalLock != null) {
             return;
         }
         if (isOtherThreadsHaveLocks()) {
