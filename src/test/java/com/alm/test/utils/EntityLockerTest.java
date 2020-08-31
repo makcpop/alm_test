@@ -10,8 +10,7 @@ import java.util.concurrent.CountDownLatch;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class EntityLockerTest {
 
@@ -28,7 +27,7 @@ class EntityLockerTest {
         checkLock(getKeyLocks(locker).get(key), 1);
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -45,7 +44,7 @@ class EntityLockerTest {
         assertThat(getKeyLocks(locker), anEmptyMap());
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -63,7 +62,7 @@ class EntityLockerTest {
         checkLock(getKeyLocks(locker).get(key), 2);
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -89,7 +88,7 @@ class EntityLockerTest {
         assertThat(getKeyLocks(locker), anEmptyMap());
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -115,7 +114,7 @@ class EntityLockerTest {
         assertThat(getReentrantLockCount(lock), is(1));
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -148,7 +147,7 @@ class EntityLockerTest {
         assertThat(getKeyLocks(locker), anEmptyMap());
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -163,7 +162,7 @@ class EntityLockerTest {
         assertThat(getKeyLocks(locker), anEmptyMap());
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         checkLock(getGlobalLock(locker), 1);
     }
 
@@ -179,7 +178,7 @@ class EntityLockerTest {
         assertThat(getKeyLocks(locker), anEmptyMap());
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -195,7 +194,7 @@ class EntityLockerTest {
         assertThat(getKeyLocks(locker), anEmptyMap());
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         checkLock(getGlobalLock(locker), 2);
     }
 
@@ -212,13 +211,13 @@ class EntityLockerTest {
         assertThat(getLockedKeys(locker).get(), empty());
         assertThat(getKeyLocks(locker), anEmptyMap());
 
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         checkLock(getGlobalLock(locker), 1);
 
         locker.unlockGlobal();
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -237,7 +236,7 @@ class EntityLockerTest {
         checkLock(getKeyLocks(locker).get(key), 1);
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         checkLock(getGlobalLock(locker), 1);
     }
 
@@ -255,7 +254,7 @@ class EntityLockerTest {
         assertThat(getLockedKeys(locker).get(), empty());
         assertThat(getKeyLocks(locker), anEmptyMap());
 
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         checkLock(getGlobalLock(locker), 1);
     }
 
@@ -269,7 +268,7 @@ class EntityLockerTest {
         locker.lock(keyOne);
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
 
         locker.lock(keyTwo);
@@ -295,7 +294,7 @@ class EntityLockerTest {
         locker.unlock(keyTwo);
 
         assertFalse(getIsLockEscalated(locker).get());
-        assertFalse(getIsWaitingForGlobalLock(locker));
+        assertNull(getWaitingForGlobalLock(locker));
         assertThat(getGlobalLock(locker), nullValue());
     }
 
@@ -511,10 +510,10 @@ class EntityLockerTest {
         return (ThreadLocal<Boolean>) keyLocks.get(entityLocker);
     }
 
-    private boolean getIsWaitingForGlobalLock(EntityLocker<Long> entityLocker) throws Exception{
-        Field keyLocks = EntityLocker.class.getDeclaredField("isWaitingForGlobalLock");
+    private Long getWaitingForGlobalLock(EntityLocker<Long> entityLocker) throws Exception{
+        Field keyLocks = EntityLocker.class.getDeclaredField("waitingForGlobalLock");
         keyLocks.setAccessible(true);
-        return (boolean) keyLocks.get(entityLocker);
+        return (Long) keyLocks.get(entityLocker);
     }
 
     private long getThreadId(Lock lock) throws Exception{
